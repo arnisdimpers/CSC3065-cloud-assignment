@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>QUBGradeMe - Error Page</title>
+ 
+ 
+<style type="text/css">
+body  {
+    font-size: 150%;
+    font-family: monospace;
+}
+ 
+#logo
+{
+    font-family: Calibri, sans-serif;
+    font-weight: lighter;
+    color: #505050;
+    margin: 0.5em;
+}
+ 
+#editor
+{
+    text-align: center;
+    margin-top: 1em;
+}
+ 
+#output {
+    font-size: 100%;
+    padding: 0.2em;
+    margin: 0.2em;
+    font-family: monospace;
+    letter-spacing: 0.1em;
+}
+ 
+#content {
+    font-size: 100%;
+    padding: 0.2em;
+    margin: 0.2em;
+    font-family: monospace;
+    letter-spacing: 0.1em;
+}
+ 
+.operation {
+    border: solid #d0d0d0 1px;
+    background-color: #f0f0f0;
+    padding: 1.5em;
+    margin: 1em;
+    width: 14em;
+}
+</style>
+ 
+ 
+</head>
+<body>
+    <div id="editor">
+        <div id="logo">
+            QUBGradeMe - Error Page
+        </div>
+ 
+        <div>
+            <p id="greeting">hi
+            </p>
+        </div>
+ 
+ 
+        <a href="index.html">Try Again</a>
+    </div>
+    </body>
+ 
+ 
+</body>
+<script type="text/javascript">
+    const queryString = window.location.search;
+    const urlParams = new URLSearchParams(queryString);
+ 
+ 
+    const error_code = urlParams.get('error')
+    console.log(error_code)
+ 
+ 
+    document.getElementById("greeting").innerHTML =  "Something went wrong... " + error_code + " error!";
+ 
+ 
+</script>
+ 
+</html>

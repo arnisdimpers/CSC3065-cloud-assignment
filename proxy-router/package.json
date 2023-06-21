@@ -1,0 +1,22 @@
+{
+    "name": "router-proxy",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "router",
+    "author": "Me>",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "test": "mocha"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "firebase": "^9.13.0",
+        "node-fetch": "^3.2.10",
+        "request": "^2.88.2"
+    },
+    "devDependencies": {
+        "chai": "^4.2.0",
+        "mocha": "^6.2.2"
+    }
+}

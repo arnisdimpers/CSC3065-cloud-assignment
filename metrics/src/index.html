@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>QUBeditotron3000</title>
+
+    <script type="text/javascript">
+
+        //2 proxy routers metrics page will use
+        let proxy1 = "http://proxyrouter.40233517.qpc.hal.davecutting.uk";
+        let proxy2 = "http://proxyrouter2.40233517.qpc.hal.davecutting.uk";
+
+        //initialize to later build URL to go through proxy
+        var url = null;
+
+        //initialize to later store service response time in MS and display on page
+        var a, b, timer = 0;
+
+        //proxy load balancer - used to switch from proxy 1 to 2
+        var proxylb = false;
+
+        //all errors encountered will be stored in this array
+        var arrayError = [];
+
+        //async function that overwrites normal 'fetch url' to also include a timeout after 8 seconds (for when functions are offline and do not respond)
+        async function fetchWithTimeout(resource, options = {}) {
+            const { timeout = 8000 } = options;
+
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            const response = await fetch(resource, {
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(id);
+            return response;
+        }
+
+        /*function that will build URL, fetch response, and trouble shoot any errors.
+
+        proxy = URL of current proxy in use(can pass in either proxy1 or proxy2)
+        mark_1, ..., mark_5 = STRING value used to pass in the parameters for marks
+        module_1, ..., module_5 = STRING value used to pass in the parameters for modules
+        operation = STRING value proxy will read this and decide what function to call
+        expected_answer = STRING value answer expected from proxy response
+        expected_error = STRING value error expected from proxy response (true/false)
+        response_path = STRING value that will be passed into evol() and evaluated by java as real code. use this to locate service response answer (e.g. result["answer"])
+        output = STRING value of output field name to be used to display the function response on metrics page
+        useProxy2 = BOOLEAN value true/false that tells function if it should use proxy2 if passed in proxy fails to get response
+        */
+        async function testFunctions(proxy, mark_1, mark_2, mark_3, mark_4, mark_5, module_1, module_2, module_3, module_4, module_5, operation, expected_answer, expected_error, response_path, output, useProxy2) {
+            //grab the current date to show user/log for debugging.
+            var right_now = new Date();
+
+            //check if proxyload balancer is false then use current proxy
+            if (proxylb == false) {
+                proxylb = true;
+                //build url to be passed into proxy
+                url = proxy + "/?mark_1=" + mark_1 + "&mark_2=" + mark_2 + "&mark_3=" + mark_3 + "&mark_4=" + mark_4 + "&mark_5=" + mark_5 + "&module_1=" + module_1 + "&module_2=" + module_2 + "&module_3=" + module_3 + "&module_4=" + module_4 + "&module_5=" + module_5 + "&operation=" + operation;
+            } else {
+                //if proxyload balancer is true then use proxy2 and set proxy load balancer to false so it would use proxy1 the next time
+                proxylb = false;
+                proxy = proxy2;
+                //build url to be passed into proxy
+                url = proxy2 + "/?mark_1=" + mark_1 + "&mark_2=" + mark_2 + "&mark_3=" + mark_3 + "&mark_4=" + mark_4 + "&mark_5=" + mark_5 + "&module_1=" + module_1 + "&module_2=" + module_2 + "&module_3=" + module_3 + "&module_4=" + module_4 + "&module_5=" + module_5 + "&operation=" + operation;
+            }
+            console.log(url);
+
+            //try catch clause to fetch response from proxy using custom fetchWithTimeout made on line 26
+            try {
+                a = performance.now();
+                const response = await fetchWithTimeout(url, {
+                    timeout: 6000
+                });
+                console.log("1: URL passed: ~" + response.ok);
+
+                //if fetch response is loaded and status 200 (working)
+                if (response.ok && response.status == 200) {
+
+                    //write to Firebase that function is live and passed
+                    noErrorFound(operation);
+
+                    //log time taken for response and await response to be transcoded to JSON format
+                    b = performance.now();
+                    timer = b - a;
+                    console.log("timer ended.. " + timer + " ms");
+                    result = await response.json();
+                    console.log("2: passing result: ~");
+                    console.log(result);
+
+                    //Inform user in output field that response is being loaded
+                    document.getElementById(output).innerHTML = 'Loading...';
+
+                    //Before loading in result to metrics wait for 600ms to avoid result and response not being ready to use
+                    setTimeout(function () {
+                        //Write to 'output' parameter which points to the functions specific output layer
+                        var page_error = false;
+                        console.log(result.error);
+                        if (result.error == null) {
+                            page_error = "False";
+                        }
+                        else {
+                            page_error = result.error;
+                        }
+                        document.getElementById(output).innerHTML = `Time of test: ` + right_now + `<br><br>Expected Answer: ` + expected_answer + `<br>Answer: ` + eval(response_path) + `<br><br>Expected Error: ` + expected_error + `<br>Error: ` + page_error + `
+                            <br><br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br>Page response: ` + parseInt(timer) + ` ms<br> <br>`;
+
+                        //Check if result has an error which is true = meaning function encountered a problem, read the error to user.
+                        if (result.error == true) {
+                            console.log("result produced error: true for operation: " + operation);
+                            //Check operation value to decide in which function output field to put the error message
+                            if (operation == "maxmin") {
+                                console.log('MAXMIN statement: error is true');
+                                var function_result = `MaxMin Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_maxmin").innerHTML = function_result;
+                            }
+                            if (operation == "average") {
+                                console.log('AVERAGE statement: error is true');
+                                var function_result = `Average Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_average").innerHTML = function_result;
+                            }
+                            if (operation == "classifygrade") {
+                                console.log('CLASSIFYGRADE statement: error is true');
+                                var function_result = `Classify Grade Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_classifygrade").innerHTML = function_result;
+                            }
+                            if (operation == "totalmarks") {
+                                console.log('TOTAL MARKS statement: error is true');
+                                var function_result = `Total Marks Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_totalmarks").innerHTML = function_result;
+                            }
+                            if (operation == "didifail") {
+                                console.log('DID I FAIL statement: error is true');
+                                var function_result = `Did I Fail Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_didifail").innerHTML = function_result;
+                            }
+                            if (operation == "sortmodules") {
+                                console.log('SORT MODULES statement: error is true');
+                                var function_result = `Sort Modules Counter<br>
+                                Page Error: ` + result.error + `<br>Page status: ` + response.status + `<br>Error string: ` + result.string + `<br>Time: ` + right_now;
+                                arrayError.push(function_result);
+                                document.getElementById("result_error_sortmodules").innerHTML = function_result;
+                            }
+                        }
+                    }, 600);
+                }
+                else {
+                    //response.ok failed or response.code is not 200
+                    console.log(response.status + " page not ==200");
+
+                    //Part D : Frontend Service Failure Handler (if proxy1 URL fails, use backup proxy2 URL)
+                    if (!useProxy2 & proxylb == false) {
+                        console.log("proxy1 works, proxy2 broken, loadbalancer wanted to use proxy2, making it use proxy1 again(overwriting loadbalancer)");
+                        testFunctions(proxy1, mark_1, mark_2, mark_3, mark_4, mark_5, module_1, module_2, module_3, module_4, module_5, operation, expected_answer, expected_error, response_path, output, false);
+                    }
+                    //change to proxy2 only if its already not been activated (bool value switches from false to true if on proxy2)
+                    if (!useProxy2) { //if not on proxy 2 then switch to proxy 2
+                        console.log("switched to proxy2");
+                        //little note: 'useProxy2' param is bool and we set to true, in turn if proxy2 fails and comes here again, it will not start this method again and just go to HandleError as both proxy1 and proxy2 failed
+                        testFunctions(proxy2, mark_1, mark_2, mark_3, mark_4, mark_5, module_1, module_2, module_3, module_4, module_5, operation, expected_answer, expected_error, response_path, output, true);
+                    }
+                    else {
+                        //PART B 2: Error Handling BackEnd Read Each Service Status Code
+                        //HandleError(response.status);
+                        console.log("handleError came up");
+
+                        //write to firebase database whatever function returned error
+                        errorFound(operation);
+
+                        if (operation == "maxmin") {
+                            console.log('IF statement: the route');
+                            var function_result = `The MaxMin<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_maxmin").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                        if (operation == "average") {
+                            console.log('IF statement: the route');
+                            var function_result = `The Average<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_average").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                        if (operation == "classifygrade") {
+                            console.log('IF statement: the route');
+                            var function_result = `The Classify Grade<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_classifygrade").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                        if (operation == "totalmarks") {
+                            console.log('IF statement: the route');
+                            var function_result = `The Total Marks<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_totalmarks").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                        if (operation == "didifail") {
+                            console.log('IF statement: the route');
+                            var function_result = `Did I Fail<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_didifail").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                        if (operation == "sortmodules") {
+                            console.log('IF statement: the route');
+                            var function_result = `Sort Modules<br>Page status: ` + response.status + `<br>Service Endpoint: ` + proxy;
+                            arrayError.push(function_result);
+                            document.getElementById("result_error_sortmodules").innerHTML = function_result;
+                            document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: ` + response.status + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                        }
+                    }
+                }
+            } catch (err) {
+                //normal URLs Fetch API will catch 404, but through davids rancher hoster, Fetch API doesnt see error 404 so we have to catch it
+                console.log("Caught Error: " + err);
+
+                //Part D : Frontend Service Failure Handler (if proxy1 URL fails, use backup proxy2 URL)
+                //change to proxy2 only if its already not been activated (bool value switches from false to true if on proxy2)
+                if (!useProxy2 && proxylb == true) { //Part D: Load balancing - If Else statement
+                    console.log("switched to proxy2");
+                    //little note: 3rd param is bool and we set to true, in turn if proxy2 fails and comes here again, it will not start this method again and just go to HandleError
+                    testFunctions(proxy2, mark_1, mark_2, mark_3, mark_4, mark_5, module_1, module_2, module_3, module_4, module_5, operation, expected_answer, expected_error, response_path, output, true);
+                }
+                else if (!useProxy2 && proxylb == false) {
+                    console.log("switched2 to proxy1");
+                    testFunctions(proxy1, mark_1, mark_2, mark_3, mark_4, mark_5, module_1, module_2, module_3, module_4, module_5, operation, expected_answer, expected_error, response_path, output, true);
+                }
+                else {
+                    //Part E: Alert Homepage on Failure of specified service using operation tag
+                    errorFound(operation);
+
+                    console.log("handleError came up");
+
+                    //Print error'ed function on top of metrics page under "Errors Found" tab
+                    if (operation == "maxmin") {
+                        console.log('catch error: maxmin function');
+                        var function_result = `Max Min Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_maxmin").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                    if (operation == "average") {
+                        console.log('catch error: average function');
+                        var function_result = `Average Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_average").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                    if (operation == "classifygrade") {
+                        console.log('catch error: classifygrade function');
+                        var function_result = `Classify Grade Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_classifygrade").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                    if (operation == "totalmarks") {
+                        console.log('catch error: totalmarks function');
+                        var function_result = `Total Marks Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_totalmarks").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                    if (operation == "didifail") {
+                        console.log('catch error: didifail function');
+                        var function_result = `Did I Fail Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_didifail").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                    if (operation == "sortmodules") {
+                        console.log('catch error: sortmodules function');
+                        var function_result = `Sort Modules Function<br>Page Status: 404` + `<br>Service Endpoint: ` + proxy + `<br>Time: ` + right_now;
+                        arrayError.push(function_result);
+                        document.getElementById("result_error_sortmodules").innerHTML = function_result;
+                        document.getElementById(output).innerHTML = `FUNCTION FAILED<br>Check "Errors Found" Tab.<br>Time of test: ` + right_now + `<br>Error: 404` + `
+                            <br>mark_1 passed: ` + mark_1 + ' mark_2 passed: ' + mark_2 + ' mark_3 passed: ' + mark_3 + ' mark_4 passed: ' + mark_4 + ' mark_5 passed: ' + mark_5 + "<br><br>module_1 passed: " + module_1 + " module_2 passed: " + module_2 + " module_3 passed: " + module_3 + " module_4 passed: " + module_4 + " module_5 passed: " + module_5 + `<br><br>Operation passed: ` + operation + `<br>Proxy used: ` + proxy + `<br><br>`;
+                    }
+                }
+            }
+        }
+
+
+        //repeat this function every 5 seconds to run diagnostics on each function.
+        function tick() {
+            var seconds = new Date().getSeconds();
+            var minutes = new Date().getMinutes();
+            console.log("TIME: " + seconds);
+            //all functions run at specific time to avoid colision with other functions
+            if (minutes === 21) {
+
+                console.log("its 1: testing maxmin function");
+                testFunctions(proxy1, "20", "50", "60", "90", "85", "mod1", "mod2", "mod3", "mod4", "mod5", "maxmin", "mod1 - 20 mod4 - 90", false, "result[\"min_module\"][\"module\"] + \" - \" + result[\"min_module\"][\"grade\"] + \" \" + result[\"max_module\"][\"module\"] + \" - \" + result[\"max_module\"][\"grade\"]", "result_maxmin_output", false);
+            }
+            if (minutes == 15) {
+
+                console.log("its 45: testing totalmarks function");
+                testFunctions(proxy1, "20", "50", "60", "90", "85", "mod1", "mod2", "mod3", "mod4", "mod5", 'totalmarks', '305',
+                    false, "result[\'answer\']", 'result_totalmarks_output', false);
+            }
+            if (minutes === 24) {
+
+                console.log("its 30: testing sortmodules function");
+                testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'sortmodules', 'mod4 90 mod5 85 mod3 60 mod2 50 mod1 20', false, 'result[\'sorted_modules\'][0][\'module\'] + \' \' + result[\'sorted_modules\'][0][\'marks\'] + \' \' + result[\'sorted_modules\'][1][\'module\'] + \' \' + result[\'sorted_modules\'][1][\'marks\'] + \' \' + result[\'sorted_modules\'][2][\'module\'] + \' \' + result[\'sorted_modules\'][2][\'marks\'] + \' \' + result[\'sorted_modules\'][3][\'module\'] + \' \' + result[\'sorted_modules\'][3][\'marks\'] + \' \' + result[\'sorted_modules\'][4][\'module\']  + \' \' + result[\'sorted_modules\'][4][\'marks\']', 'result_sortmodules_output', false);
+
+            }
+            if (minutes === 30) {
+
+                console.log("its 30: testing average function");
+                testFunctions(proxy1, "20", "50", "60", "90", "85", "mod1", "mod2", "mod3", "mod4", "mod5", 'average', '61', false, "result[\"average\"]", 'result_average_output', false);
+
+            }
+            if (minutes == 45) {
+
+                console.log("its 45: testing classifygrade function");
+                testFunctions(proxy1, "20", "50", "60", "90", "85", "mod1", "mod2", "mod3", "mod4", "mod5", 'classifygrade', 'Module: mod1 Fail Module: mod2 Pass Module: mod3 Commendation Module: mod4 Distinction Module: mod5 Distinction',
+                    false, "result[\'grades\'][0][\'module\'] + \' \' + result[\'grades\'][0][\'grade\'] + \' \' + result[\'grades\'][1][\'module\'] + \' \' + result[\'grades\'][1][\'grade\'] + \' \' + result[\'grades\'][2][\'module\'] + \' \' + result[\'grades\'][2][\'grade\'] + \' \' + result[\'grades\'][3][\'module\'] + \' \' + result[\'grades\'][3][\'grade\'] + \' \' + result[\'grades\'][4][\'module\'] + \' \' + result[\'grades\'][4][\'grade\']", 'result_classifygrade_output', false);
+            }
+            if (minutes === 55) {
+
+                console.log("its 30: testing didifail function");
+                testFunctions(proxy1, "20", "50", "60", "90", "85", "mod1", "mod2", "mod3", "mod4", "mod5", 'didifail', 'Module 1: mod1. Failed.', false, "result[\"answer1\"]", 'result_didifail_output', false);
+
+            }
+        }
+        setInterval(tick, 5000); //3.6million MS == 1 hour ORORORORO 10k (10 seconds) and check not sec but minutes
+
+
+    </script>
+
+    <style type="text/css">
+        body {
+            font-size: 150%;
+            font-family: monospace;
+        }
+
+        #logo {
+            font-family: Calibri, sans-serif;
+            color: #505050;
+            margin: 0.5em;
+            font-weight: bold;
+        }
+
+        #text {
+            font-family: Calibri, sans-serif;
+            color: #505050;
+            margin: 0.5em;
+            font-size: 80%;
+            float: left;
+        }
+
+        #editor {
+            text-align: center;
+            margin-top: 1em;
+        }
+
+        #output {
+            font-size: 100%;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+        }
+
+        #content {
+            font-size: 100%;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+        }
+
+        .operation {
+            border: solid #d0d0d0 1px;
+            background-color: #f0f0f0;
+            padding: 1.5em;
+            margin: 1em;
+            width: 14em;
+        }
+
+        #title {
+            text-align: left;
+            font-size: 150%;
+            float: left;
+        }
+    </style>
+
+</head>
+
+<body>
+    <script type="module">
+        // Import the functions you need from the SDKs you need 
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-app.js";
+        import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-database.js";
+        //import { getDatabase } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-database.js";
+        // TODO: Add SDKs for Firebase products that you want to use
+        // https://firebase.google.com/docs/web/setup#available-libraries
+
+        // Your web app's Firebase configuration
+        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+        const firebaseConfig = {
+            apiKey: "AIzaSyABtvG0L-WYBr-lfupAP0iLlKxVdJzER08",
+            authDomain: "cloudwebsite-1d9e7.firebaseapp.com",
+            databaseURL: "https://cloudwebsite-1d9e7-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "cloudwebsite-1d9e7",
+            storageBucket: "cloudwebsite-1d9e7.appspot.com",
+            messagingSenderId: "792302685609",
+            appId: "1:792302685609:web:da7e01b695b5f1192088b8",
+            measurementId: "G-WD7ELKL5QD"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+
+        // Initialize Realtime Database and get a reference to the service
+        const database = getDatabase(app);
+
+        //added an onvalue active listener for the error nodes for each function
+        //the moment the homepage alerts the user and error status changes to false > clean the error list on top of page
+        const dbref = ref(database, '/errors');
+        onValue(dbref, (snapshot) => {
+            snapshot.forEach(function (Datasnapshot) {
+                var status = Datasnapshot.val().status;
+                //checking individual service status error, if false then remove active error from top of page
+                if (!status) {
+                    console.log("cleaning error messages from top of page");
+
+                    //check in which service did the error status change to false, and reset it
+                    switch (Datasnapshot.key) {
+                        case "average":
+                            document.getElementById("result_error_average").innerHTML = "";
+                            break;
+                        case "classifygrade":
+                            document.getElementById("result_error_classifygrade").innerHTML = "";
+                            break;
+                        case "didifail":
+                            document.getElementById("result_error_didifail").innerHTML = "";
+                            break;
+                        case "maxmin":
+                            document.getElementById("result_error_maxmin").innerHTML = "";
+                            break;
+                        case "sortmodules":
+                            document.getElementById("result_error_sortmodules").innerHTML = "";
+                            break;
+                        case "totalmarks":
+                            document.getElementById("result_error_totalmarks").innerHTML = "";
+                            break;
+                    }
+                }
+            })
+        });
+
+
+        //2 methods that after every function is tested write to database if errors found = true or false
+        //if anytime error status will be stored as true - homepage will read the error'ed function instantly
+        window.errorFound = function (name) {
+            console.log("errorFound function name: " + name);
+            const db = getDatabase();
+            set(ref(db, 'errors/' + name), {
+                status: true,
+            });
+        }
+
+        window.noErrorFound = function (name) {
+            console.log("errorFound function name: " + name);
+            const db = getDatabase();
+            set(ref(db, 'errors/' + name), {
+                status: false,
+            });
+        }
+    </script>
+
+    <div id="editor">
+        <div id="logo">
+            QUBG GradeMe App - Monitoring Metrics
+        </div>
+        <hr>
+        <button id="testnow" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'average', '61', false, 'result[\'average\']', 'result_average_output', false);">Test
+            Now(average)</button>
+        <button id="testnow2" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'maxmin', 'mod1 - 20 mod4 - 90', false, 'result[\'min_module\'][\'module\'] + \' - \' + result[\'min_module\'][\'grade\'] + \' \' + result[\'max_module\'][\'module\'] + \' - \' + result[\'max_module\'][\'grade\']', 'result_maxmin_output', false);">Test
+            Now(maxmin)</button>
+        <button id="testnow2" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'classifygrade', 'Module: mod1 Fail Module: mod2 Pass Module: mod3 Commendation Module: mod4 Distinction Module: mod5 Distinction',
+            false, 'result[\'grades\'][0][\'module\'] + \' \' + result[\'grades\'][0][\'grade\'] + \' \' + result[\'grades\'][1][\'module\'] + \' \' + result[\'grades\'][1][\'grade\'] + \' \' + result[\'grades\'][2][\'module\'] + \' \' + result[\'grades\'][2][\'grade\'] + \' \' + result[\'grades\'][3][\'module\'] + \' \' + result[\'grades\'][3][\'grade\'] + \' \' + result[\'grades\'][4][\'module\'] + \' \' + result[\'grades\'][4][\'grade\']', 'result_classifygrade_output', false);">Test
+            Now(classifygrade)</button>
+        <button id="testnow3" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'totalmarks', '305', false, 'result[\'answer\']', 'result_totalmarks_output', false);">Test
+            Now(totalmarks)</button>
+        <button id="testnow4" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '60', '41', '50', '90', '35', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'didifail', 'Module 1: mod1. 60 is a passing grade.', false, 'result[\'answer1\']', 'result_didifail_output', false);">Test
+            Now(didifail)</button>
+        <button id="testnow5" style="float: left" class="operation"
+            onclick="testFunctions(proxy1, '20', '50', '60', '90', '85', 'mod1', 'mod2', 'mod3', 'mod4', 'mod5', 'sortmodules', 'mod4 90 mod5 85 mod3 60 mod2 50 mod1 20', false, 'result[\'sorted_modules\'][0][\'module\'] + \' \' + result[\'sorted_modules\'][0][\'marks\'] + \' \' + result[\'sorted_modules\'][1][\'module\'] + \' \' + result[\'sorted_modules\'][1][\'marks\'] + \' \' + result[\'sorted_modules\'][2][\'module\'] + \' \' + result[\'sorted_modules\'][2][\'marks\'] + \' \' + result[\'sorted_modules\'][3][\'module\'] + \' \' + result[\'sorted_modules\'][3][\'marks\'] + \' \' + result[\'sorted_modules\'][4][\'module\']  + \' \' + result[\'sorted_modules\'][4][\'marks\']', 'result_sortmodules_output', false);">Test
+            Now(sortmodules)</button>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title" style="float: left;">Errors Found</p1>
+        <br>
+        <br>
+        <p id="result_error_average" style="text-align: left;"></p>
+        <p id="result_error_maxmin" style="text-align: left;"></p>
+        <p id="result_error_classifygrade" style="text-align: left;"></p>
+        <p id="result_error_totalmarks" style="text-align: left;"></p>
+        <p id="result_error_didifail" style="text-align: left;"></p>
+        <p id="result_error_sortmodules" style="text-align: left;"></p>
+        <p1 id="title">
+            Average Function
+        </p1>
+        <br>
+        <br>
+        <p id="result_average_output" style="float: left; text-align: left;"></p>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title">
+            <br>Max Min Function
+        </p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p id="result_maxmin_output" style="float: left; text-align: left;"></p>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title">
+            <br>Classify Grade Function
+        </p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p id="result_classifygrade_output" style="float: left; text-align: left;"></p>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title">
+            <br>Total Marks Function
+        </p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p id="result_totalmarks_output" style="float: left; text-align: left;"></p>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title">
+            <br>Did I Fail Function
+        </p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p id="result_didifail_output" style="float: left; text-align: left;"></p>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p1 id="title">
+            <br>Sort Modules Function
+        </p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <p id="result_sortmodules_output" style="float: left; text-align: left;"></p>
+    </div>
+</body>
+
+
+</html>

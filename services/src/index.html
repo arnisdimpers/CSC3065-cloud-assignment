@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>QUB Grade Me</title>
+
+    <script type="text/javascript">
+
+    </script>
+
+    <style type="text/css">
+        body {
+            font-size: 150%;
+            font-family: monospace;
+        }
+
+        #logo {
+            font-family: Calibri, sans-serif;
+            color: #505050;
+            margin: 0.5em;
+            font-weight: bold;
+        }
+
+        #text {
+            font-family: Calibri, sans-serif;
+            color: #505050;
+            margin: 0.5em;
+            font-size: 80%;
+            float: left;
+        }
+
+        #editor {
+            text-align: center;
+            margin-top: 1em;
+        }
+
+        #output {
+            font-size: 100%;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+        }
+
+        #content {
+            font-size: 100%;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+        }
+
+        .operation {
+            border: solid #d0d0d0 1px;
+            background-color: #f0f0f0;
+            padding: 1.5em;
+            margin: 1em;
+            width: 14em;
+        }
+
+        #title {
+            text-align: left;
+            font-size: 150%;
+            float: left;
+        }
+    </style>
+
+</head>
+
+<body>
+
+    <script type="module">
+        // Import the functions you need from the SDKs you need 
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-app.js";
+        import { getDatabase, ref, get, set, push, onChildChanged, onValue, remove } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-database.js";
+        //import { getDatabase } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-database.js";
+        // TODO: Add SDKs for Firebase products that you want to use
+        // https://firebase.google.com/docs/web/setup#available-libraries
+
+        // Your web app's Firebase configuration
+        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+        const firebaseConfig = {
+            apiKey: "AIzaSyABtvG0L-WYBr-lfupAP0iLlKxVdJzER08",
+            authDomain: "cloudwebsite-1d9e7.firebaseapp.com",
+            databaseURL: "https://cloudwebsite-1d9e7-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "cloudwebsite-1d9e7",
+            storageBucket: "cloudwebsite-1d9e7.appspot.com",
+            messagingSenderId: "792302685609",
+            appId: "1:792302685609:web:da7e01b695b5f1192088b8",
+            measurementId: "G-WD7ELKL5QD"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+
+        // Initialize Realtime Database and get a reference to the service
+        const database = getDatabase(app);
+
+
+        function addItemsToList(name, url, url2) {
+            var ul = document.getElementById('list');
+            var header = document.createElement('h2');
+
+            var _url = document.createElement('li');
+            var _url2 = document.createElement('li');
+
+            header.innerHTML = 'Service-' + name;
+
+            _url.innerHTML = 'URL 1: ' + url + '<br>URL 2: ' + url2;
+
+            ul.appendChild(header);
+            ul.appendChild(_url);
+        }
+
+        function FetchAllData() {
+            const db = getDatabase();
+            const dbref = ref(db);
+
+            console.log("entered fetchalldata");
+
+            var ul = document.getElementById('list');
+            ul.innerHTML = "";
+
+            onValue(dbref, (snapshot) => {
+
+                ul.innerHTML = "";
+
+                snapshot.forEach(
+                    function (ChildSnaphot) {
+                        var name = ChildSnaphot.key;
+                        console.log("NAME FOUND", name);
+
+                        //database stores all error codes inside one of the snapshots.
+                        //if statement checks if current snapshot is named 'error' and if true then ignore and move to next snapshot
+                        if (name != "errors" && name != "savedPage") {
+                            var url = ChildSnaphot.val().url;
+                            var url2 = ChildSnaphot.val().url2;
+                            console.log("URL found: " + url + " AND URL2: " + url2);
+                            addItemsToList(name, url, url2);
+                        }
+                    }
+                )
+            });
+        }
+
+
+        window.addService = function () {
+            console.log("addService - button pressed");
+
+            //disable add Service button until the service is added to database - limits user spam input
+            document.getElementById("addServicebtn").disabled = true;
+
+            //read user input for new service
+            var sName = document.getElementById("serviceName").value;
+            var sURL = document.getElementById("url1").value;
+            var sURL2 = document.getElementById("url2").value;
+            console.log(sName + " " + sURL + " " + sURL2);
+
+            //check if service name is empty - if not then proceed like normal
+            if (sName != "") {
+                //save new service to database
+                const db = getDatabase();
+                set(ref(db, sName), {
+                    url: sURL,
+                    url2: sURL2
+                }).then(() => {
+                    console.log("service added");
+
+                    //enable add Service button for user again so it can be clicked again
+                    document.getElementById("addServicebtn").disabled = false;
+                }).catch((error) => {
+                    //enable add Service button for user again so it can be clicked again
+                    console.error(error);
+                    document.getElementById("addServicebtn").disabled = false;
+                });
+            }
+            else {
+                //if service name is empty then dont add anything to firebase, enable button and tell user to insert service name
+                document.getElementById("addServicebtn").disabled = false;
+                alert("Please insert a service name to be added.");
+            }
+        }
+
+        window.removeService = function () {
+            console.log("removeService - button pressed");
+
+            //disable remove Service button until the service is removed from database - limits user spam input
+            document.getElementById("removeServicebtn").disabled = true;
+
+            //save user input for service name to be removed
+            var sName = document.getElementById("serviceName").value;
+
+            if (sName != "") {
+                //go into database and remove service and all child data
+                const db = getDatabase();
+                const dbref = ref(db, sName);
+                remove(dbref).then(() => {
+                    console.log("service: " + sName + " removed.");
+
+                    //enable remove Service button for user again so it can be clicked again
+                    document.getElementById("removeServicebtn").disabled = false;
+                }).catch((error) => {
+                    //enable remove Service button for user again so it can be clicked again
+                    console.log("error in removing service: " + error);
+                    document.getElementById("removeServicebtn").disabled = false;
+                });
+            }
+            else {
+                //if service name is empty then dont remove anything from firebase, enable button and tell user to insert service name
+                document.getElementById("removeServicebtn").disabled = false;
+                alert("Please insert a service name to be removed.");
+            }
+        }
+
+        //on page startup fetch all data
+        window.onload = FetchAllData();
+
+    </script>
+
+    <div id="editor">
+        <div id="logo">
+            QUB Grade Me - Service Manager
+        </div>
+        <hr>
+        <p1 style="float: left; text-align: left;">Please insert Service Name and 2 URLs leading to Service for Proxy to
+            incorporate.<br>
+            Add/Update button will add a brand new service/or replace existing one with new URLs.<br>
+            Remove button read Service name and remove it from database.</p1>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <form style="float: left; text-align: left;">
+            <label for="serviceName">Service Name:</label>
+            <input type="text" id="serviceName" name="serviceName" placeholder="Insert operation name"><br><br>
+            <label for="url1">URL 1:</label>
+            <input type="text" id="url1" name="url1" placeholder="Insert Service URL 1"><br><br>
+            <label for="url2">URL 2:</label>
+            <input type="text" id="url2" name="url2" placeholder="Insert Service URL 2"><br><br>
+        </form>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <button id="addServicebtn" style="float: left" class="operation" onclick="addService();">Add/Update
+            Service</button>
+        <button id="removeServicebtn" style="float: left" class="operation" onclick="removeService();">Remove
+            Service</button>
+        <br>
+        <br>
+        <br>
+        <br>
+        <br>
+        <ul id="list" style="float: left; text-align: left;"></ul>
+
+        </ul>
+    </div>
+</body>
+
+
+</html>

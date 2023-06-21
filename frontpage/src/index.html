@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>QUBGrader</title>
+
+    <script type="text/javascript">
+
+        // 2 proxy router links to load balance with, and if 1 goes down the other will be used.
+        let router1 = "http://proxyrouter.40233517.qpc.hal.davecutting.uk";
+        let router2 = "http://proxyrouter2.40233517.qpc.hal.davecutting.uk";
+        // initialize text and accessLink  fields for building the global links while working with proxy routers.
+        let text = null;
+        let accessLink = null;
+        // initialize in the load balancer as required for using different router1-2 from last used.
+        var loadBalancer = false;
+
+        // dynamicFetch is a function that's used to fetch for the built link with 'router1/2' and the finished built 'link'.
+        // we fetch the link within 10000 miliseconds, if we can't reach the service - it's considered a timeout.
+        // also tests for 'down' functions, when they are no longer live. 
+        // Not live is different from code responses like 404 or 200 - because function might be simply not hosted, in case of deletion from Rancher.
+        // In such case Rancher will endlessly try to access a function that is Not Live and never return a 404 code, so a time out fixes this.
+        async function dynamicFetch(resource, options = {}) {
+            // we create a 10000 miliseconds timeout.
+            const { timeout = 10000 } = options;
+            // create an abort controller to stop trying once we deplete timeout.
+            const controller = new AbortController();
+            // we create a setTimeout operation with the timeout variable,
+            // to abort while fetching for longer than 10000 miliseconds.
+            const id = setTimeout(() => controller.abort(), timeout);
+            const response = await fetch(resource, {
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(id);
+
+            // upon receiving a response within the timeframe we can return it as a successful fetch.
+            return response;
+        }
+
+        // we use routerSend function for all buttons, load balancers, router failures, fetches, status code checks.
+        // the proxy function builds links to send to the router1/2 hosted on Rancher.
+        // additional functionalities include: load balancing, fetch response, 
+        // if error or bad request occurs, routerSend will call on itself with another routerSend.
+        // because of load balancing, routerSend calls routerSend in itself depending on which router1/2 was used last. 
+        // Every button press is a new proxy that's used (if the other is unreachable(down) then only 1 is used without fail).
+        // button freezing and unfreezing such that user would NOT spam the buttons repeatedly while a response is already processing.
+        async function routerSend(router, operation, otherRouter) {
+
+            // to get a link we will use input from frontend. module_1..5 mark_1..5 and save their data in seperate variables.
+            let n1, n2, n3, n4, n5 = ""; // we initialize n1..5 for name of modules.
+            let m1, m2, m3, m4, m5 = ""; // we initialize m1..5 for module marks.
+
+            // next we save the user input from frontend into these temporary variables.
+            // first we save marks:
+            m1 = encodeURI(document.getElementById('mark_1').value);
+            m2 = encodeURI(document.getElementById('mark_2').value);
+            m3 = encodeURI(document.getElementById('mark_3').value);
+            m4 = encodeURI(document.getElementById('mark_4').value);
+            m5 = encodeURI(document.getElementById('mark_5').value);
+            // next we save the module names:
+            n1 = encodeURI(document.getElementById('module_1').value);
+            n2 = encodeURI(document.getElementById('module_2').value);
+            n3 = encodeURI(document.getElementById('module_3').value);
+            n4 = encodeURI(document.getElementById('module_4').value);
+            n5 = encodeURI(document.getElementById('module_5').value);
+
+            // next we check what load balancer (bool) to use. If False we use router 1, if True we use router 2.
+            // Load balancer is always changed when either of the router is used at any point in the program, it changes manually in this Switch case.
+            // routerSend also changes the router with accordance to loadBalancer every time it is used.
+            switch (loadBalancer) {
+                case false: // in case of a false boolean we set loadbalancer to true and build the link with router 1
+                    loadBalancer = true;
+                    // because we are building the accessLink for router and not for functions themselves, we use a special parameter 'operation' which
+                    // is used in the dynamic router. It is dynamic because we can create any button or send in any parameter without updating code
+                    // to the router itself. This is achieved by firebase with an online database. As long as the parameter 'operation' is passed in,
+                    // that exists in firebase with accessible link, dynamic router will use the 'operation' value for example 'maxmin' and read the maxmin url from firebase.
+                    accessLink = router + "/?operation=" + operation + "&module_1=" + n1 + "&mark_1=" + m1 + "&module_2="
+                        + n2 + "&mark_2=" + m2 + "&module_3=" + n3 + "&mark_3=" + m3
+                        + "&module_4=" + n4 + "&mark_4=" + m4 + "&module_5="
+                        + n5 + "&mark_5=" + m5;
+
+                    console.log("router1: link from async: " + accessLink); // console log for user verification that router 1 was used. This way we know every time which router is used.
+                    break; // we break out of the switch statement
+                case true: // in case of a true boolean we set loadbalancer to false and build the link with router 2
+                    loadBalancer = false;
+                    // this time we use router2 variable which has the 2nd router link, we dynamically build the link that was requested.
+                    // smart logic for load balancer is we use routers depending which one was used last, if 1 of them is down we no longer access it so there are no 
+                    // blank loadbalancing responses. load balancing will always change routers every request, no matter the sequence from different functions or 
+                    //spamming them which has been fixed by disabling buttons while waiting for fetch response. 
+                    accessLink = router2 + "/?operation=" + operation + "&module_1=" + n1 + "&mark_1=" + m1 + "&module_2="
+                        + n2 + "&mark_2=" + m2 + "&module_3=" + n3 + "&mark_3=" + m3
+                        + "&module_4=" + n4 + "&mark_4=" + m4 + "&module_5="
+                        + n5 + "&mark_5=" + m5;
+                    console.log("router2: link from async: " + accessLink); // console log for user verification that router 2 was used. This way we know every time which router is used.
+                    break; // we break out of the switch statement
+            }
+
+            // the try catch statement starts operation when either of the 6 function buttons is pressed.
+            // a collection of errors will be catched and sent to the desired error page to display what error code was received.
+            // main functionalities of the try-catch is to fetch the built accessLink to proxy services and while waiting for response, disable and enable buttons while,
+            // change output-text frontend field to let user know we are waiting on response. This locks the user once operation on a function has begun such that they,
+            // wouldn't overload the qubgrademe application by spamming buttons.
+            try {
+                // here we disable user input accross the frontend temporarily while waiting for the fetch response.
+                document.getElementById("firebase_get").disabled = true; // each button such as 'Get Firebase' is disabled
+                document.getElementById("firebase_push").disabled = true;
+                document.getElementById("sort").disabled = true;
+                document.getElementById("maxmin").disabled = true;
+                document.getElementById("didifail").disabled = true;
+                document.getElementById("total").disabled = true;
+                document.getElementById("classify").disabled = true;
+                document.getElementById("average").disabled = true;
+                document.getElementById("clear").disabled = true;
+                document.getElementById("metrics").disabled = true;
+                // we also display temporary text while waiting for response in output field.
+                document.getElementById("output-text").value = 'Your function is being processed. Output will be shown here.';
+
+
+                // we use a dynamic fetch function, which was difficult to build because of how Rancher hosts functions.
+                // we need to await a response before proceeding with next code, a timeout of 9 seconds (9000 miliseconds) is in place.
+                const response = await dynamicFetch(accessLink, { // we fetch using the accessLink which has our routers, parameters for module name and marks in place.
+                    timeout: 9000
+                });
+                // after receiving JSON response from the router, we save it in response variable to read from it.
+                // it has more information than will be displayed on frontend, for example status codes are read to determine if
+                // the link is accessible but whether it operates as inteded.
+
+                // we use an if statement to read the response JSON from dynamic fetch. If response code is 200 and OK then we can continue to read the data back from router.
+                if (response.ok && response.status == 200) { // if router is operation we proceed.
+                    console.log("||| accessLink is live ||| " + response.ok); // display that router is live to console for user logs.
+
+                    // response contains whatever the router sent back, we transfer the JSON response into 'result' variable which we can use deeper in the program and
+                    // extract answers from.
+                    result = await response.json();
+                    console.log("||| response received ||| "); // display the routers response we received, a console reponse format with error status, module, marks and functions answer.
+                    console.log(result);
+
+                    // we use a set timeout function for 1.5 seconds (1500 miliseconds) to insert the result response into frontend, 6 different functions require 6 different prints.
+                    // a switch case is used to identify what operation was used and what fields will be read into to display the response.
+                    setTimeout(function () {
+
+                        // switch case for operation, it was set on frontend when button was pressed. 
+                        // An "average" function will make 'operation' be determined by what was passed in: routerSend(router, operation, otherRouter)
+                        // Response from router is stored in 'result' variables, which we access to insert the data into the frontend fields.
+                        switch (operation) {
+                            case "average": // when operation is average, means the 'average' button was pressed and proxy url built and used. 
+                                // depending on the result fields we use an if statement to know if router came back with an error or not.
+                                if (result.error == true && result.average != null) { // this is true, if error is true, and 'average' exists which holds the answer from function.
+                                    // This is for wrong user input but function still operates with other given marks. Pointing out which mark fields have wrong input type.
+                                    document.getElementById('output-text').value = 'Average for given marks: ' + JSON.stringify(result.average) + '\nProblem occured.\n' + JSON.stringify(result.error_message);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else if (result.error == true && result.average == null) { // this is true, if error is true and 'average' came back empty "null".
+                                    // this means not a single module mark was inputted correctly and as such we don't need to print the average as it doesn't exist.
+                                    // error_message contains the explanation of programs error.
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.error_message);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else { // the default frontend print, for when error is false and we can simply print the average answer.
+                                    document.getElementById('output-text').value = 'Average for given marks: ' + JSON.stringify(result.average);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+
+                            case "didifail": // for didifail case, means the did i fail button was pressed for this function, the proxy returned successfully with a response which we will print.
+                                if (result.error == true) { // first we read if error is true.
+                                    // error_message contains the explanation of programs error.
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.string)
+                                        + "\n\n" + JSON.stringify(result.answer1) + "\n" + JSON.stringify(result.answer2) + "\n" + JSON.stringify(result.answer3) + "\n" + JSON.stringify(result.answer4) + "\n" + JSON.stringify(result.answer5);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else {
+                                    document.getElementById('output-text').value = JSON.stringify(result.answer1) + "\n" + JSON.stringify(result.answer2) + "\n" + JSON.stringify(result.answer3) + "\n" + JSON.stringify(result.answer4) + "\n" + JSON.stringify(result.answer5);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+
+                            case "totalmarks":
+                                if (result.error == "true") {
+                                    // string contains the explanation of programs error.
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.string);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else if (result.string == null) {
+                                    document.getElementById('output-text').value = 'Total for given marks: ' + JSON.stringify(result.answer);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else {
+                                    // string contains the explanation of programs error.
+                                    document.getElementById('output-text').value = 'Total for given marks: ' + JSON.stringify(result.answer) + '\n' + JSON.stringify(result.string);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                            case "classifygrade":
+                                if (result.error == true) {
+                                    // error_msg contains the explanation of programs error.
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.error_msg);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else { // if no error if found then display the classified grades for given modules.
+                                    document.getElementById('output-text').value = JSON.stringify(result.grades[0].module) + " " + JSON.stringify(result.grades[0].grade) + "\n" + JSON.stringify(result.grades[1].module) + " " + JSON.stringify(result.grades[1].grade)
+                                        + "\n" + JSON.stringify(result.grades[2].module) + " " + JSON.stringify(result.grades[2].grade) + "\n" + JSON.stringify(result.grades[3].module) + " " + JSON.stringify(result.grades[3].grade)
+                                        + "\n" + JSON.stringify(result.grades[4].module) + " " + JSON.stringify(result.grades[4].grade);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                            case "maxmin":
+                                // error_message contains the explanation of programs error.
+                                if (result.error == true || result.error == "true") {
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.error_message);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else {
+                                    //displayMaxMin(max_module, min_module);
+                                    document.getElementById('output-text').value = 'Highest scoring module = ' + JSON.stringify(result.max_module.module) + " " + JSON.stringify(result.max_module.grade)
+                                        + '\nLowest scoring module = ' + JSON.stringify(result.min_module.module) + " " + JSON.stringify(result.min_module.grade);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+
+                                }
+                            case "sortmodules":
+                                // string contains the explanation of programs error.
+                                if (result.error == true) {
+                                    document.getElementById('output-text').value = 'Problem occured.\n' + JSON.stringify(result.string);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                                else {
+                                    document.getElementById('output-text').value = JSON.stringify(result.sorted_modules[0].module) + " " + JSON.stringify(result.sorted_modules[0].marks) + "\n"
+                                        + JSON.stringify(result.sorted_modules[1].module) + " " + JSON.stringify(result.sorted_modules[1].marks) + "\n" + JSON.stringify(result.sorted_modules[2].module) + " " + JSON.stringify(result.sorted_modules[2].marks) + "\n"
+                                        + JSON.stringify(result.sorted_modules[3].module) + " " + JSON.stringify(result.sorted_modules[3].marks) + "\n" + JSON.stringify(result.sorted_modules[4].module) + " " + JSON.stringify(result.sorted_modules[4].marks);
+                                    break; // once finished printing elements we break out of the switch case as we have finished printing the results to frontend.
+                                }
+                            default: // the default for when no function with a given name is found, this means proxy returned an answer, we mapped the button on frontend, but forgot to
+                            // write a switch case to display the functions output.
+                                document.getElementById('output-text').value = 'Unspecified switch output, please add to the Switch case the new function.';
+                                break;
+
+                        }
+
+                        // after going through the switch case we can enable the buttons, now that the function has been pressed, buttons disabled, router returned a response and we read it into
+                        // the specified fields on frontend, we can finally enable the buttons.
+                        document.getElementById("firebase_get").disabled = false;
+                        document.getElementById("firebase_push").disabled = false;
+                        document.getElementById("sort").disabled = false;
+                        document.getElementById("maxmin").disabled = false;
+                        document.getElementById("classify").disabled = false;
+                        document.getElementById("total").disabled = false;
+                        document.getElementById("average").disabled = false;
+                        document.getElementById("didifail").disabled = false;
+                        document.getElementById("clear").disabled = false;
+                        document.getElementById("metrics").disabled = false;
+
+                    }, 1500); // the 1500 milisecond (1.5 second) time request, required for button presses, to stop user from spamming the buttons and let them know an answer is coming.
+                }
+
+                /////////////////////////////////////////////////////////////////////////////////////////////////////
+                /////////////////////////////////////////////////////////////////////////////////////////////////////
+                ////////////////// Service handler /////////// Service handler /////////// Service handler ///////////
+                ////////////////// Service handler /////////// Service handler /////////// Service handler ///////////
+                /////////////////////////////////////////////////////////////////////////////////////////////////////
+                /////////////////////////////////////////////////////////////////////////////////////////////////////
+                else { // an else statement to the initial if page is OK or code 200
+                    console.log("Did not receive 200 or OK from Response: " + response.status); // we print in the console that response did not return 200/ok and as such we read the response and navigate to the other proxy.
+                    // Service Failure Handler part, 2nd part is in the below catch(), such that when routers cannot return a response. We try backup router 2 before displaying error.
+                    // because the initial router did not produce a response, we are forced to try another router service, if either one works, it is set as the only working router. If none then we proceed to print error.
+                    if (!otherRouter) { // if other router statement is false, as it should be on the initial router access, we try router 2 for same operation. 
+                        // routerSend function is called inside itself with a different router and boolean value for this if statement.
+                        console.log("2ND ATTEMPT: trying to call routerSend with router2 and bool true");
+                        routerSend(router2, operation, true); // the true bool val will make it so we skip this if statement next time, resulting in conclusion that both routers are down and we proceed to print the error.
+                    }
+                    else {
+                        // readError is an error handling function written to display a number of errors from response of the routers.
+                        readError(response.status); // here we call the function with response we collected from fetch and the status of the page.
+                    }
+                }
+            } catch (err) { // catch error statement for the full router, where we fetch, analyze and print response. We change the load balance in this statement for  apropriate router accesses.
+                console.log(err + " Error occured."); // print to console the error we found for fixing.
+
+                ///////////////////////////////////////////////////////////////////////////////////////////////////
+                ///////////////////////////////////////////////////////////////////////////////////////////////////
+                ////////////////// Load balancing /////////// Load balancing /////////// Load balancing ///////////
+                ////////////////// Load balancing /////////// Load balancing /////////// Load balancing ///////////
+                ////////////////// Load balancing /////////// Load balancing /////////// Load balancing ///////////
+                ///////////////////////////////////////////////////////////////////////////////////////////////////
+                ///////////////////////////////////////////////////////////////////////////////////////////////////
+                // load balancing is checked and changed for router access depending on previously used router.
+                // Service Failure Handler continuation and load balancing. Here we proceed with errors, and also use load balancing.
+                // if either router is down we will use only 1 of the available routers, this is a dynamic load balancing statement imbedded in the programs algorithm to switch routers 1/2 every function call,
+                // but only use either one if the 2nd is down. If both are down we go to the Else clause with error.
+                if (!otherRouter && loadBalancer == true) { // this is the load balancing if statement, where we change it every function access. While load balancer is enabled we proceed with router 2
+                    console.log("switched to router2"); // log the switch from router 1 to router 2
+                    
+                    // we read the load balancer and create a new routerSend request with a 2nd router, we also set the next router access to be router 1.
+                    routerSend(router2, operation, true); 
+                }
+                else if (!otherRouter && loadBalancer == false) { // we read the loadbalancer and for iterations we switch the load balancer. this time we use router1 again, 
+                    // if no errors are occuring and program functions as intended.
+                    console.log("switched to router1"); // log the switch from router 2 to router 1
+                    
+                    // if router 2 was just used, we go with router 1 and vice versa. This is part of the load balancing logic, where routers are functional.
+                    routerSend(router1, operation, true);
+                }
+                else {
+                    // we check if router can be used, and load balancer is available.
+                    // if router 1 and 2 are down then we proceed to Else clause where we display the status code error.
+                    // despite load balancing, if both routers are down and non operational, because they are hosted on Rancher a unique status code will be returned which will be sent to the readError function.
+                    readError(404);
+                }
+            }
+        }
+
+        ///////////////////////////////////////////////////////////////////////////////////////////////////
+        ///////////////////////////////////////////////////////////////////////////////////////////////////
+        ////////////////// Error details /////////// Error details /////////// Error details //////////////
+        ////////////////// Error details /////////// Error details /////////// Error details //////////////
+        ////////////////// Error details /////////// Error details /////////// Error details //////////////
+        ///////////////////////////////////////////////////////////////////////////////////////////////////
+        ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // special function to read error codes and print them to the user. A switch case is used to navigate all possible error codes and tell them to the user.
+        // new html webpage error.html is opened to display the said error code.
+        // a console log is printed to let the user know that program encountered major errors (this only happends with down routers, for example if Rancher is down or restarts, different error codes will be printed)
+        function readError(status_code) {
+            // using a switch case we read the status code sent from the error handler
+            switch (status_code) {
+                case 500:
+                    console.log("Internal Server Error Status Code 500"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=500"); // open the html page with according error code from the failed router requests
+                    break;
+                
+                case 406:
+                    console.log("Not Acceptable Status Code 406"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=406"); // open the html page with according error code from the failed router requests
+                    break;
+                case 401:
+                    console.log("Unauthorized Status Code 401"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=401"); // open the html page with according error code from the failed router requests
+                    break;
+
+                    case 408:
+                    console.log("Request Timeout Status Code 408"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=408"); // open the html page with according error code from the failed router requests
+                    break;
+
+                case 429:
+                    console.log("Too Many Requests Status Code 429"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=429"); // open the html page with according error code from the failed router requests
+                    break;
+
+                    case 405:
+                    console.log("Method Not Allowed Status Code 405"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=405"); // open the html page with according error code from the failed router requests
+                    break;
+
+                    case 409:
+                    console.log("Conflict Status Code 409"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=409"); // open the html page with according error code from the failed router requests
+                    break;
+
+                case 403:
+                    console.log("Forbidden Status Code 403"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=403"); // open the html page with according error code from the failed router requests
+                    break;
+                
+                    case 400:
+                    console.log("Bad Request Status Code 400"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=400"); // open the html page with according error code from the failed router requests
+                    break;
+                
+
+                case 408:
+                    console.log("Request Timeout Status Code 408"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=408"); // open the html page with according error code from the failed router requests
+                    break;
+
+                    case 404:
+                    console.log("Page Not Found Status Code 404"); //print console log for user to know this status code returned and a new html window will be open.
+                    window.location.replace("error.html?error=404"); // open the html page with according error code from the failed router requests
+                    break;
+
+                    default: 
+                    console.log("No such status code exists: " + status.code); // default console log for if we receive an error which is not in the switch statement.
+               
+            }
+        }
+
+
+
+        // a clear text function, for the 'clear' button. This cleans the whole frontend fields.
+        function clearText() {
+            document.getElementById('module_1').value = '';
+            document.getElementById('module_2').value = '';
+            document.getElementById('module_3').value = '';
+            document.getElementById('module_4').value = '';
+            document.getElementById('module_5').value = '';
+            document.getElementById('mark_1').value = '';
+            document.getElementById('mark_2').value = '';
+            document.getElementById('mark_3').value = '';
+            document.getElementById('mark_4').value = '';
+            document.getElementById('mark_5').value = '';
+            document.getElementById('output-text').value = '';
+
+        }
+
+
+
+    </script>
+
+    <style type="text/css">
+        body {
+            font-size: 150%;
+            font-family: monospace;
+        }
+
+        #logo {
+            font-family: Calibri, sans-serif;
+            font-weight: lighter;
+            color: #505050;
+            margin: 0.5em;
+        }
+
+        #qga {
+            text-align: center;
+            margin-top: 1em;
+        }
+
+        .display-module {
+            font-size: 90%;
+            color: black;
+            background-color: white;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+            width: 480px;
+
+        }
+
+        .display-mark {
+            font-size: 90%;
+            color: black;
+            background-color: white;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+            width: 90px;
+
+        }
+
+        .display-output {
+            font-size: 90%;
+            color: white;
+            background-color: black;
+            padding: 0.2em;
+            margin: 0.2em;
+            font-family: monospace;
+            letter-spacing: 0.1em;
+            width: 1000px;
+
+
+        }
+
+        .qgabutton-active {
+            background-color: rgb(55, 37, 174);
+            color: white;
+            padding: 0px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 18px;
+            margin: 4px 2px;
+            cursor: pointer;
+            height: 40px;
+            width: 400px;
+        }
+
+        .qgabutton-inactive {
+            background-color: gray;
+            color: white;
+            padding: 0px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 18px;
+            margin: 4px 2px;
+            cursor: pointer;
+            height: 40px;
+            width: 400px;
+        }
+
+        .qgabutton-clear {
+            background-color: red;
+            color: white;
+            padding: 0px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 18px;
+            margin: 4px 2px;
+            cursor: pointer;
+            height: 40px;
+            width: 400px;
+        }
+
+        .qgabutton-firebase {
+            background-color: rgb(0, 155, 13);
+            color: white;
+            padding: 0px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 18px;
+            margin: 4px 2px;
+            cursor: pointer;
+            height: 40px;
+            width: 400px;
+        }
+
+        .qgabutton-pages {
+            background-color: rgb(183, 177, 6);
+            color: white;
+            padding: 0px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 18px;
+            margin: 4px 2px;
+            cursor: pointer;
+            height: 40px;
+            width: 400px;
+        }
+    </style>
+
+</head>
+
+<body>
+    <script type="module">
+        // Import the functions you need from the SDKs you need 
+        // we need the neccessary sdks from firebase for the frontend as well as metrics, proxy and service handler to function as needed,
+        // by reading, storing, updating and listening to data changes constantly online.
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-app.js";
+        import { getDatabase, ref, get, set, onValue } from "https://www.gstatic.com/firebasejs/9.8.3/firebase-database.js";
+        
+        // my private firebase credentials for this frontend page.
+        // this points only to my firebase functionality of push notifications, get and save text fields for the frontend.
+        // fireabase creditionals are also on metrics, proxy, and service handler page. This allows the 4 pages including frontend to work in unison.
+        const firebaseConfig = {
+            apiKey: "AIzaSyABtvG0L-WYBr-lfupAP0iLlKxVdJzER08",
+            authDomain: "cloudwebsite-1d9e7.firebaseapp.com",
+            databaseURL: "https://cloudwebsite-1d9e7-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "cloudwebsite-1d9e7",
+            storageBucket: "cloudwebsite-1d9e7.appspot.com",
+            messagingSenderId: "792302685609",
+            appId: "1:792302685609:web:da7e01b695b5f1192088b8",
+            measurementId: "G-WD7ELKL5QD"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+
+        // Initialize Realtime Database and get a reference to the service
+        const database = getDatabase(app);
+
+        //constant checker for any functions that report being errored from the Metrics page
+        const db = getDatabase();
+
+        // dynamic firebase listener for errors from metrics page. The metrics page constantly tests functions for error stages.
+        // if an error is found, the metrics page changes properties and records the details on firebase, front page has the below said listener,
+        // which notifies the user immediately with a pop up window on what function just failed a test.
+        const dbchar = ref(db, '/errors'); // firebase for /errors place holder, which metrics page has access to and updates if tests fail.
+        onValue(dbchar, (snapshot) => { // on value change of /errors, we read the snapshot and print the pop up confirm window which after clicking "yes", updates the firebase error code to 'false'
+            snapshot.forEach(function (Datasnapshot) {
+                var status = Datasnapshot.val().status; // save the snapshot value in status variable.
+                console.log("error encountered " + status + " " + Datasnapshot.key); // we console log the error status and the name of failing function. e.g. will look like "Error: true/false Average" for every function
+                // if Error: True will occur, the below if statement will trigger
+                if (status) { // if statement that reads the status, if error status of a specific function is set to True by metrics testing page, we open a pop up window letting the user know.
+                    if (window.confirm("Error encountered for: " + Datasnapshot.key + "\nCheck metrics page.")) { // the error message displayed to user in a new confirm window, once user confirms click, we change status to False.
+                        set(ref(db, '/errors/' + Datasnapshot.key), {
+                            status: false // the status of error is changed to false as user was notified and clicked "yes", but metrics testing will make the function 'true' again window will pop up again,
+                            // while the issue of tests failing on that specific function persist until they are fixed.
+                        });
+                    }
+
+                }
+            })
+        });
+
+
+        // activated upon pressing the Upload to firebase button on frontend. 
+        // accesses my custom firebase page to save values from output field, marks and module name fields.
+        // paired with the firebase upload and get buttons, we can easily input module names and marks, use any of the 6 functions to print an answer, push the fields into firebase, 
+        // clear the frontend, do another student marks and then return the previously entered marks.
+        window.pushToFirebase = function () {
+            // access the database for Firebase
+            const gdb = getDatabase();
+
+            set(ref(gdb, 'savedPage/'), { // we save text fields from frontend to this specific savedPage/
+
+                // we first save the output field which contains our main text for any function output.
+                // we can then return the data by accessing the same firebase field "output".
+                output: document.getElementById("output-text").value,
+                mark_1: document.getElementById("mark_1").value,
+                mark_2: document.getElementById("mark_2").value,
+                mark_3: document.getElementById("mark_3").value,
+                mark_4: document.getElementById("mark_4").value,
+                mark_5: document.getElementById("mark_5").value,
+                // we save the module 1..5 element fields by reading the value and saving it into
+                // defined module_1..5 fields on firebase.
+                module_1: document.getElementById("module_1").value,
+                module_2: document.getElementById("module_2").value,
+                module_3: document.getElementById("module_3").value,
+                module_4: document.getElementById("module_4").value,
+                module_5: document.getElementById("module_5").value
+
+            });
+            console.log("firebase: transferring data to database"); //console log for browser logs to know button has been pressed.
+        }
+
+        // activated upon pressing the Read button on frontend.
+        // reads the data from firebase, saves into variables and puts their value in required marks, modules and output fields.
+        window.getFromFirebase = function () {
+
+            // access the firebase database
+            const gdb = getDatabase();
+            get(ref(gdb, 'savedPage/')).then((snapshot) => {
+                if (snapshot.exists()) {
+                    // firebase contains all our saved values, for our output text field, it is storred on firebase as "output".
+                    // we retrieve it by reading a snapshots value of the output field.
+                    var output = snapshot.child("output").val();
+                    // same for marks, we process marks 1..5 and store the data in temporary variables m1..5
+                    var m1 = snapshot.child("mark_1").val();
+                    var m2 = snapshot.child("mark_2").val();
+                    var m3 = snapshot.child("mark_3").val();
+                    var m4 = snapshot.child("mark_4").val();
+                    var m5 = snapshot.child("mark_5").val();
+                    // for module names we store the data in temporary variables n1...5 upon retrieving from firebase.
+                    var n1 = snapshot.child("module_1").val();
+                    var n2 = snapshot.child("module_2").val();
+                    var n3 = snapshot.child("module_3").val();
+                    var n4 = snapshot.child("module_4").val();
+                    var n5 = snapshot.child("module_5").val();
+
+                    // after getting all of the firebase data and storing in temporary variables,
+                    // we put it inside the element ids of module, marks and output-text fields.
+                    // this way we can save and retrieve all of necessary data with just 2 buttons.
+                    document.getElementById("module_1").value = n1;
+                    document.getElementById("module_2").value = n2;
+                    document.getElementById("module_3").value = n3;
+                    document.getElementById("module_4").value = n4;
+                    document.getElementById("module_5").value = n5;
+                    document.getElementById("mark_1").value = m1;
+                    document.getElementById("mark_2").value = m2;
+                    document.getElementById("mark_3").value = m3;
+                    document.getElementById("mark_4").value = m4;
+                    document.getElementById("mark_5").value = m5;
+                    // the final element we print to frontend from temp variable is output.
+                    document.getElementById("output-text").value = output;
+
+                }
+            }).catch((error) => { // in case of an error while reading the firebase we print the message to console for fixing.
+                console.log(error);
+            });
+            console.log("firebase: transferring data from database"); //console log for browser logs to know button has been pressed.
+        }
+
+    </script>
+
+    <div id="qga">
+        <div id="logo">
+            QUB GradeMe App
+        </div>
+        <div>
+            <input class="display-module" type="text" id="module_1" name="module_1" placeholder="Module 1"
+                value="module1">
+            <input class="display-mark" type="text" id="mark_1" name="mark_1" placeholder="Mark 1" value=50></br>
+            <input class="display-module" type="text" id="module_2" name="module_2" placeholder="Module 2"
+                value="module2">
+            <input class="display-mark" type="text" id="mark_2" name="mark_2" placeholder="Mark 2" value="10"></br>
+            <input class="display-module" type="text" id="module_3" name="module_3" placeholder="Module 3"
+                value="Module3">
+            <input class="display-mark" type="text" id="mark_3" name="mark_3" placeholder="Mark 3" value=65></br>
+            <input class="display-module" type="text" id="module_4" name="module_4" placeholder="Module 4"
+                value="Module4">
+            <input class="display-mark" type="text" id="mark_4" name="mark_4" placeholder="Mark 4" value=100></br>
+            <input class="display-module" type="text" id="module_5" name="module_5" placeholder="Module 5"
+                value="Module5">
+            <input class="display-mark" type="text" id="mark_5" name="mark_5" placeholder="Mark 5" value=1>
+        </div>
+        <div>
+            <textarea class="display-output" id="output-text" rows="8" cols="35" readonly=1
+                placeholder="Results here..." value="">
+        </textarea>
+        </div>
+        <br>
+        <div>Firebase Access Buttons / Save State</div>
+        <div>
+            <button id="firebase_get" class="qgabutton-firebase" onclick="getFromFirebase();">Get from Firebase</button>
+        </div>
+        <div>
+            <button id="firebase_push" class="qgabutton-firebase" onclick="pushToFirebase();">Push to Firebase</button>
+        </div>
+        <br>
+        <div>6 Function Buttons</div>
+        <div>
+            <button id="maxmin" class="qgabutton-active" onclick="routerSend(router1, 'maxmin', false);">Highest &
+                Lowest Scoring Modules</button>
+        </div>
+        <div>
+            <button id="sort" class="qgabutton-active" onclick="routerSend(router1, 'sortmodules', false);">Sort
+                Modules</button>
+        </div>
+        <div>
+            <button id="total" class="qgabutton-active" onclick="routerSend(router1, 'totalmarks', false);">Total
+                Marks</button>
+        </div>
+        <div>
+            <button id="classify" class="qgabutton-active"
+                onclick="routerSend(router1, 'classifygrade', false);">Classify
+                Grade</button>
+        </div>
+        <div>
+            <button id="didifail" class="qgabutton-active" onclick="routerSend(router1, 'didifail', false);">Did I
+                fail</button>
+        </div>
+        <div>
+            <button id="average" class="qgabutton-active" onclick="routerSend(router1, 'average', false);">Get
+                Average</button>
+        </div>
+
+        <br>
+        <div>Metrics Service / View Errors & Live Testing</div>
+        <div>
+            <button id="metrics" class="qgabutton-pages"
+                onclick="location.href='http://metrics.40233517.qpc.hal.davecutting.uk/'">Metrics Page (Errors & Testing)</button>
+        </div>
+        <br>
+        <div>Service Handler / Add New Functions</div>
+        <div>
+            <button id="servicehandler" class="qgabutton-pages"
+                onclick="location.href='http://servicemanager.40233517.qpc.hal.davecutting.uk/'">Service Manager Page (Add
+                Functions)</button>
+        </div>
+        <br>
+        <div>Delete Answer Fields</div>
+        <div>
+            <button id="clear" class="qgabutton-clear" onclick="clearText();">Clear</button>
+        </div>
+
+
+    </div>
+</body>
+
+<script type="text/javascript">
+</script>
+
+</html>
